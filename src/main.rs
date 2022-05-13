@@ -1,7 +1,39 @@
 use rand::distributions::{Distribution, Uniform};
+use std::io;
 
 fn main() {
-    println!("{}", get_pi(3_000_000));
+    loop {
+        println!("Number of points in sample:");
+        let mut points = String::new();
+        io::stdin()
+            .read_line(&mut points)
+            .unwrap();
+        let points: u32 = match points.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("Input is not a number. Re-enter values.");
+                continue;
+            }
+        };
+
+        println!("Number of trials:");
+        let mut trials = String::new();
+        io::stdin()
+            .read_line(&mut trials)
+            .unwrap();
+        let trials: u32 = match trials.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("Input is not a number. Re-enter values.");
+                continue;
+            }
+        };
+
+        let pi_s: Vec<_> = (0..trials).map(|_| get_pi(points)).collect();
+        println!("{:?}", pi_s);
+
+        break;
+    }
 }
 
 fn get_pi(num_points: u32) -> f64 {
