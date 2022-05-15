@@ -1,33 +1,25 @@
 use rand::distributions::{Distribution, Uniform};
 use std::io;
+use core::str::FromStr;
+
+fn prompt_and_parse<T: FromStr>(prompt_string: &str) -> T {
+    loop {
+        println!("{}", prompt_string);
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .unwrap();
+        match input.trim().parse::<T>() {
+            Ok(value) => return value,
+            Err(_) => println!("Invalid input. Retry.")
+        };
+    }
+}
 
 fn main() {
     loop {
-        println!("Number of points in sample:");
-        let mut points = String::new();
-        io::stdin()
-            .read_line(&mut points)
-            .unwrap();
-        let points: u32 = match points.trim().parse() {
-            Ok(num) => num,
-            Err(_) => {
-                println!("Input is not a number. Re-enter values.");
-                continue;
-            }
-        };
-
-        println!("Number of trials:");
-        let mut trials = String::new();
-        io::stdin()
-            .read_line(&mut trials)
-            .unwrap();
-        let trials: u32 = match trials.trim().parse() {
-            Ok(num) => num,
-            Err(_) => {
-                println!("Input is not a number. Re-enter values.");
-                continue;
-            }
-        };
+        let points: u32 = prompt_and_parse("Number of points in sample:");
+        let trials: u32 = prompt_and_parse("Number of trials:");
 
         let pi_s: Vec<_> = (0..trials).map(|_| get_pi_proportion(points)).collect();
         println!("{:?}", pi_s);
