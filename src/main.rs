@@ -17,15 +17,11 @@ fn prompt_and_parse<T: FromStr>(prompt_string: &str) -> T {
 }
 
 fn main() {
-    loop {
-        let points: u32 = prompt_and_parse("Number of points in sample:");
-        let trials: u32 = prompt_and_parse("Number of trials:");
+    let points: u32 = prompt_and_parse("Number of points in sample:");
+    let trials: u32 = prompt_and_parse("Number of trials:");
 
-        let pi_s: Vec<_> = (0..trials).map(|_| get_pi_proportion(points)).collect();
-        println!("{:?}", pi_s);
-
-        break;
-    }
+    let pi_s: Vec<_> = (0..trials).map(|_| get_pi_proportion(points)).collect();
+    println!("{:?}", pi_s);
 }
 
 fn get_pi_proportion(num_points: u32) -> f64 {
