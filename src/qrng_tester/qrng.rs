@@ -51,75 +51,88 @@ pub enum QrngNumbers {
     Uint16(Vec<u16>),
     Hex(Vec<String>),
 }
+impl From<Vec<u8>> for QrngNumbers {
+    fn from(vect: Vec<u8>) -> Self {
+        QrngNumbers::Uint8(vect)
+    }
+}
+impl From<Vec<u16>> for QrngNumbers {
+    fn from(vect: Vec<u16>) -> Self {
+        QrngNumbers::Uint16(vect)
+    }
+}
 
-macro_rules! unwrap_or_else {
-    ( $variant:path, $obj:expr, $or_else:block ) => {
+macro_rules! unwrap_or_error {
+    ( $obj:expr, $variant:path, $error:expr $(,)? ) => {
         if let $variant(x) = $obj {
             x
         } else {
-            $or_else
+            return $error;
+        }
+    };
+    ( $obj:expr, $pattern:pat_param => $target:ident, $error:expr $(,)? ) => {
+        if let $pattern = $obj {
+            $target
+        } else {
+            return $error;
         }
     };
 }
 
 fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, &'static str> {
-    let mut obj = unwrap_or_else!(Value::Object, json, {
-        return Err("");
-    });
+    const INVALID_JSON: Result<QrngNumbers, &str> = Err("Invalid json");
+    const UNSUCCESSFUL_REQUEST: Result<QrngNumbers, &str> = Err("Unsuccessful request");
+    const NUMBER_OUT_OF_RANGE: Result<QrngNumbers, &str> = Err("Number out of range");
+    const UNKNOWN_DATA_TYPE: Result<QrngNumbers, &str> = Err("Unknown data type");
 
-    let success = if let Some(Value::Bool(x)) = obj.get("success") { x }
-    else {
-        return Err("");
-    };
+    let mut obj = unwrap_or_error!(json, Value::Object, INVALID_JSON);
+
+    let success = unwrap_or_error!(
+        obj.get("success"),
+        Some(Value::Bool(x)) => x,
+        INVALID_JSON,
+    );
     if *success == false {
-        return Err("");
+        return UNSUCCESSFUL_REQUEST;
     }
 
-    let type_of_data = if let Some(Value::String(x)) = obj.remove("type") { x }
-    else {
-        return Err("");
-    };
-    let values = if let Some(Value::Array(x)) = obj.remove("data") { x }
-    else {
-        return Err("");
-    };
+    let type_of_data = unwrap_or_error!(
+        obj.remove("type"),
+        Some(Value::String(x)) => x,
+        INVALID_JSON,
+    );
+    let values = unwrap_or_error!(
+        obj.remove("data"),
+        Some(Value::Array(x)) => x,
+        INVALID_JSON,
+    );
 
-    fn uint_vector<T: TryFrom<u64>>(values: &Vec<Value>) -> Result<Vec<T>, &'static str> {
+    fn uint_vector<T>(values: &Vec<Value>) -> Result<QrngNumbers, &'static str>
+    where
+        T: TryFrom<u64>,
+        Vec<T>: Into<QrngNumbers>,
+    {
         let mut ret_vec: Vec<T> = Vec::new();
         for val in values {
-            let number = unwrap_or_else!(Value::Number, val, {
-                return Err("");
-            });
-            let number = unwrap_or_else!(Some, number.as_u64(), {
-                return Err("");
-            });
-            ret_vec.push(unwrap_or_else!(Ok, number.try_into(), {
-                return Err("");
-            }));
+            let number = unwrap_or_error!(val, Value::Number, INVALID_JSON);
+            let number = unwrap_or_error!(number.as_u64(), Some, INVALID_JSON);
+            ret_vec.push(unwrap_or_error!(number.try_into(), Ok, NUMBER_OUT_OF_RANGE));
         }
-        Ok(ret_vec)
+        Ok(ret_vec.into())
     }
 
     match &type_of_data[..] {
-        "uint8" => match uint_vector(&values) {
-            Ok(x) => Ok(QrngNumbers::Uint8(x)),
-            Err(x) => Err(x),
-        }
-        "uint16" => match uint_vector(&values) {
-            Ok(x) => Ok(QrngNumbers::Uint16(x)),
-            Err(x) => Err(x),
-        }
+        "uint8" => uint_vector::<u8>(&values),
+        "uint16" => uint_vector::<u16>(&values),
         "hex8"|"hex16" => {
             let mut ret_vec: Vec<String> = Vec::new();
             for val in values {
-                let hex = unwrap_or_else!(Value::String, val, {
-                    return Err("");
-                });
+                let hex = unwrap_or_error!(val, Value::String, INVALID_JSON);
                 ret_vec.push(hex);
             }
             Ok(QrngNumbers::Hex(ret_vec))
         },
-        _ => Err(""),
+        _ => UNKNOWN_DATA_TYPE,
     }
 }
 
