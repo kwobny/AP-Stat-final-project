@@ -1,1 +1,1 @@
-pub mod qrng;
+pub mod qrng_api;

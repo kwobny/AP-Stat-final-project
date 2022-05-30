@@ -1,3 +1,12 @@
+//! # QRNG API
+//! 
+//! This module provides a rust api for requesting random numbers
+//! from the ANU QRNG website.
+//! Internally, it interacts with the ANU QRNG website's own json web api.
+//!
+//! The module aims to mirror the ANU QRNG website's json api as
+//! directly and similarly as possible.
+
 use reqwest::blocking::Client;
 use reqwest::header::HeaderName;
 
@@ -6,6 +15,8 @@ use std::io::prelude::*;
 use std::path::Path;
 
 use serde_json::Value;
+
+use std::fmt::{Display, Formatter, self};
 
 pub enum DataType {
     Uint8,
@@ -79,11 +90,20 @@ macro_rules! unwrap_or_error {
     };
 }
 
-fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, &'static str> {
-    const INVALID_JSON: Result<QrngNumbers, &str> = Err("Invalid json");
-    const UNSUCCESSFUL_REQUEST: Result<QrngNumbers, &str> = Err("Unsuccessful request");
-    const NUMBER_OUT_OF_RANGE: Result<QrngNumbers, &str> = Err("Number out of range");
-    const UNKNOWN_DATA_TYPE: Result<QrngNumbers, &str> = Err("Unknown data type");
+#[derive(Debug)]
+struct GenericError<'a>(&'a str);
+impl Display for GenericError<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for GenericError<'_> {}
+
+fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, GenericError<'static>> {
+    const INVALID_JSON: Result<QrngNumbers, GenericError> = Err(GenericError("Invalid json"));
+    const UNSUCCESSFUL_REQUEST: Result<QrngNumbers, GenericError> = Err(GenericError("Unsuccessful request"));
+    const NUMBER_OUT_OF_RANGE: Result<QrngNumbers, GenericError> = Err(GenericError("Number out of range"));
+    const UNKNOWN_DATA_TYPE: Result<QrngNumbers, GenericError> = Err(GenericError("Unknown data type"));
 
     let mut obj = unwrap_or_error!(json, Value::Object, INVALID_JSON);
 
@@ -107,7 +127,7 @@ fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, &'static str> {
         INVALID_JSON,
     );
 
-    fn uint_vector<T>(values: &Vec<Value>) -> Result<QrngNumbers, &'static str>
+    fn uint_vector<T>(values: Vec<Value>) -> Result<QrngNumbers, GenericError<'static>>
     where
         T: TryFrom<u64>,
         Vec<T>: Into<QrngNumbers>,
@@ -122,8 +142,8 @@ fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, &'static str> {
     }
 
     match &type_of_data[..] {
-        "uint8" => uint_vector::<u8>(&values),
-        "uint16" => uint_vector::<u16>(&values),
+        "uint8" => uint_vector::<u8>(values),
+        "uint16" => uint_vector::<u16>(values),
         "hex8"|"hex16" => {
             let mut ret_vec: Vec<String> = Vec::new();
             for val in values {
@@ -136,7 +156,7 @@ fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, &'static str> {
     }
 }
 
-pub fn get_block(data_type: &DataType, array_length: &ArrayLength) -> Result<(), Box<dyn std::error::Error>> {
+pub fn get_block(data_type: &DataType, array_length: &ArrayLength) -> Result<QrngNumbers, Box<dyn std::error::Error>> {
     fn get_type_str(data_type: &DataType) -> &str {
         match data_type {
             DataType::Uint8 => "uint8",
@@ -166,9 +186,12 @@ pub fn get_block(data_type: &DataType, array_length: &ArrayLength) -> Result<(),
         .send()?
         .json()?;
 
-    println!("{:?}", resp);
+    let parsed_numbers = qrng_numbers_from_json(resp);
 
-    Ok(())
+    match parsed_numbers {
+        Ok(x) => Ok(x),
+        Err(x) => Err(Box::new(x)),
+    }
 }
 
 fn get_api_key() -> String {
