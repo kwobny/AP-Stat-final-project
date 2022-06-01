@@ -7,16 +7,18 @@
 //! The module aims to mirror the ANU QRNG website's json api as
 //! directly and similarly as possible.
 
-use reqwest::blocking::Client;
-use reqwest::header::HeaderName;
-
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
+use std::fmt::{Display, Formatter, self};
+
+use std::borrow::Borrow;
+
 use serde_json::Value;
 
-use std::fmt::{Display, Formatter, self};
+use reqwest::blocking::Client;
+use reqwest::header::HeaderName;
 
 pub enum DataType {
     Uint8,
@@ -31,7 +33,7 @@ pub struct BlockSize {
 impl BlockSize {
     pub fn new(value: u8) -> Self {
         if !(1..=10).contains(&value) {
-            panic!("Invalid value.");
+            panic!("block size is not between 1 and 10 (inclusive)");
         }
 
         Self { value }
@@ -47,7 +49,7 @@ pub struct ArrayLength {
 impl ArrayLength {
     pub fn new(value: u16) -> Self {
         if !(1..=1024).contains(&value) {
-            panic!("Invalid value.");
+            panic!("array length is not between 1 and 1024 (inclusive)");
         }
 
         Self { value }
@@ -91,19 +93,33 @@ macro_rules! unwrap_or_error {
 }
 
 #[derive(Debug)]
-struct GenericError<'a>(&'a str);
+struct GenericError<'a>(&'a str, Option<Box<dyn std::error::Error + 'static>>);
 impl Display for GenericError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "{}", self.0)
     }
 }
-impl std::error::Error for GenericError<'_> {}
+impl std::error::Error for GenericError<'_> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.1 {
+            Some(ref x) => Some(x.borrow()),
+            None => None,
+        }
+    }
+}
 
 fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, GenericError<'static>> {
-    const INVALID_JSON: Result<QrngNumbers, GenericError> = Err(GenericError("Invalid json"));
-    const UNSUCCESSFUL_REQUEST: Result<QrngNumbers, GenericError> = Err(GenericError("Unsuccessful request"));
-    const NUMBER_OUT_OF_RANGE: Result<QrngNumbers, GenericError> = Err(GenericError("Number out of range"));
-    const UNKNOWN_DATA_TYPE: Result<QrngNumbers, GenericError> = Err(GenericError("Unknown data type"));
+    type ReturnType = Result<QrngNumbers, GenericError<'static>>;
+    macro_rules! err_from_str {
+        ( $s:expr ) => {
+            Err(GenericError($s, None))
+        };
+    }
+
+    const INVALID_JSON: ReturnType = err_from_str!("invalid json response");
+    const UNSUCCESSFUL_REQUEST: ReturnType = err_from_str!("json success property is false");
+    const INVALID_NUMBER: ReturnType = err_from_str!("a number in the data does not conform to the type implied by the type property");
+    const UNKNOWN_DATA_TYPE: ReturnType = err_from_str!("unrecognized data type in type property");
 
     let mut obj = unwrap_or_error!(json, Value::Object, INVALID_JSON);
 
@@ -116,27 +132,27 @@ fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, GenericError<'stat
         return UNSUCCESSFUL_REQUEST;
     }
 
-    let type_of_data = unwrap_or_error!(
-        obj.remove("type"),
-        Some(Value::String(x)) => x,
-        INVALID_JSON,
-    );
     let values = unwrap_or_error!(
         obj.remove("data"),
         Some(Value::Array(x)) => x,
         INVALID_JSON,
     );
+    let type_of_data = unwrap_or_error!(
+        obj.get("type"),
+        Some(Value::String(x)) => x,
+        INVALID_JSON,
+    );
 
-    fn uint_vector<T>(values: Vec<Value>) -> Result<QrngNumbers, GenericError<'static>>
+    fn uint_vector<T>(values: Vec<Value>) -> ReturnType
     where
         T: TryFrom<u64>,
         Vec<T>: Into<QrngNumbers>,
     {
         let mut ret_vec: Vec<T> = Vec::new();
         for val in values {
-            let number = unwrap_or_error!(val, Value::Number, INVALID_JSON);
-            let number = unwrap_or_error!(number.as_u64(), Some, INVALID_JSON);
-            ret_vec.push(unwrap_or_error!(number.try_into(), Ok, NUMBER_OUT_OF_RANGE));
+            let number = unwrap_or_error!(val, Value::Number, INVALID_NUMBER);
+            let number = unwrap_or_error!(number.as_u64(), Some, INVALID_NUMBER);
+            ret_vec.push(unwrap_or_error!(number.try_into(), Ok, INVALID_NUMBER));
         }
         Ok(ret_vec.into())
     }
@@ -157,32 +173,25 @@ fn qrng_numbers_from_json(json: Value) -> Result<QrngNumbers, GenericError<'stat
 }
 
 pub fn get_block(data_type: &DataType, array_length: &ArrayLength) -> Result<QrngNumbers, Box<dyn std::error::Error>> {
-    fn get_type_str(data_type: &DataType) -> &str {
-        match data_type {
-            DataType::Uint8 => "uint8",
-            DataType::Uint16 => "uint16",
-            DataType::Hex8(_) => "hex8",
-            DataType::Hex16(_) => "hex16",
-        }
-    }
-
-    let url = match data_type {
-        DataType::Uint8 | DataType::Uint16 => format!(
-            "https://api.quantumnumbers.anu.edu.au?length={}&type={}",
-            array_length.value(),
-            get_type_str(data_type),
-        ),
-        DataType::Hex8(block_size) | DataType::Hex16(block_size) => format!(
-            "https://api.quantumnumbers.anu.edu.au?length={}&type={}&size={}",
-            array_length.value(),
-            get_type_str(data_type),
-            block_size.value(),
-        ),
+    let type_str = match data_type {
+        DataType::Uint8 => "uint8",
+        DataType::Uint16 => "uint16",
+        DataType::Hex8(_) => "hex8",
+        DataType::Hex16(_) => "hex16",
     };
+
+    let mut url = format!(
+        "https://api.quantumnumbers.anu.edu.au?length={}&type={}",
+        array_length.value(),
+        type_str,
+    );
+    if let DataType::Hex8(block_size) | DataType::Hex16(block_size) = data_type {
+        url += &format!("&size={}", block_size.value());
+    }
 
     let client = Client::new();
     let resp: Value = client.get(url)
-        .header(HeaderName::from_static("x-api-key"), get_api_key())
+        .header(HeaderName::from_static("x-api-key"), get_api_key()?)
         .send()?
         .json()?;
 
@@ -194,12 +203,16 @@ pub fn get_block(data_type: &DataType, array_length: &ArrayLength) -> Result<Qrn
     }
 }
 
-fn get_api_key() -> String {
-    let mut file = File::open(&Path::new(".env/qrng_api_key.txt"))
-        .expect("Error opening qrng api key file.");
+fn get_api_key() -> Result<String, Box<dyn std::error::Error>> {
+    let mut file = match File::open(&Path::new(".env/qrng_api_key.txt")) {
+        Ok(x) => x,
+        Err(x) => return Err(Box::new(GenericError("failed to open qrng api key file", Some(Box::new(x))))),
+    };
     let mut key = String::new();
-    file.read_to_string(&mut key).expect("Error reading qrng api key file into variable");
-    key
+    if let Err(x) = file.read_to_string(&mut key) {
+        return Err(Box::new(GenericError("failed to read qrng api key file into variable", Some(Box::new(x)))));
+    }
+    Ok(key)
 }
 
 #[cfg(test)]
